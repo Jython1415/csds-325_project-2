@@ -6,7 +6,7 @@ class RDTSocket(Utility.UnreliableSocket):
     packetStringSize = 1000
     bufferSize = 2048
     
-    def __init__(self, ip, port, windowSize):
+    def __init__(self, windowSize, ip = None, port = None):
         Utility.UnreliableSocket.__init__(self, ip, port) 
         self.targetAddress = None            # Where to sends packets to
         
