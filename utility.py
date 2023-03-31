@@ -4,11 +4,14 @@ class UnreliableSocket:
     
     probabilityOfFailure = .3
     
-    def __init__(self, ip, port):
+    def __init__(self, ip = None, port = None):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.address = (ip, port)
         self.messageQueue = []
         self.delayedMessage = None
+        
+        self.address = (ip, port)
+        if ip != None:
+            self.bind()
     
     def bind(self):
         self.socket.bind(self.address)
