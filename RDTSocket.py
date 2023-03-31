@@ -1,10 +1,11 @@
-import random
+import random, time
 import utility as Utility
 
 class RDTSocket(Utility.UnreliableSocket):
     
-    packetStringSize = 1000
+    packetStringSize = 100
     bufferSize = 2048
+    waitTime = 5e8
     
     def __init__(self, windowSize, ip = None, port = None):
         Utility.UnreliableSocket.__init__(self, ip, port) 
@@ -21,33 +22,56 @@ class RDTSocket(Utility.UnreliableSocket):
         
     # How the receiver will accept new connections
     def accept(self):
-        (newSocket, address) = self.socket.accept()[0]
-        self.socket = newSocket # This line is probably not necessary because the sockets are UDP sockets
-        self.targetAddress = address
+        print(f"Waiting for START packet at {self.socket.getsockname()}...")
+        
+        # (newSocket, address) = self.socket.accept()[0]
+        # self.socket = newSocket # This line is probably not necessary because the sockets are UDP sockets
+        # self.targetAddress = address
         
         while True:
             (recvPacket, _) = self.recv()
-            if recvPacket.packetHeader.type == 0:
-                self.receiverWindowPos = recvPacket.packetHeader.seq_num
+            if recvPacket != None and recvPacket.packetHeader.type == 0:
+                self.receiverWindowPos = recvPacket.packetHeader.seq_num + 1
+                self.targetAddress = recvPacket.packetHeader.address
                 self.sendACK(recvPacket.packetHeader.seq_num)
                 break
         
-        return address
+        print(f"Connected to ({self.targetAddress[0]}, {self.targetAddress[1]})")
+        
+        return self.targetAddress
 
     # How the sender will connect with the receiver
     def connect(self, address):
+        print(f"Connecting to ({address[0]}, {address[1]})")
+        
         # Connect to the socket
         self.socket.connect(address)
         self.targetAddress = address
         
-        # Send the START message and return the sequence number
-        self.startSeqNum = random.randint(0, 2**30)
-        self.sendto(Utility.Packet.newStartPacket(self.startSeqNum), self.targetAddress)
+        # Set the START sequence number
+        # self.startSeqNum = random.randint(0, 2**30)
+        self.startSeqNum = 0
+        
+        # Send START and Wait until ACK
+        receivedACK = False
+        while not receivedACK:
+            self.sendto(Utility.Packet.newStartPacket(self.startSeqNum), self.targetAddress)
+            print(f"Sent START packet to {self.targetAddress}")
+            
+            startTime = time.time_ns()
+            while time.time_ns() - startTime < RDTSocket.waitTime:
+                (recvPacket, _) = self.recv()
+                if recvPacket != None and recvPacket.packetHeader.type == 3 and recvPacket.packetHeader.seq_num == self.startSeqNum:
+                    receivedACK = True
+                    break
+        
+        print("START ACK received")
         return self.startSeqNum
     
     # Send ACK of seq_num
     def sendACK(self, seq_num):
         self.sendto(Utility.Packet.newAckPacket(seq_num), self.targetAddress)
+        print(f"Sent ACK {seq_num}")
     
     # How the sender will send the file
     def send(self, fileString, address = None):        
@@ -66,23 +90,18 @@ class RDTSocket(Utility.UnreliableSocket):
         
         # Create packets and add them to the queue of packets to send
         packetsToSend = [Utility.Packet.newDataPacket(self.startSeqNum + i + 1, stringsToSend[i]) for i in range(len(stringsToSend))]
-        for packet in packetsToSend:
-            self.senderPacketQueue.append(packet)
+        # for packet in packetsToSend:
+        #     self.senderPacketQueue.append(packet)
         packetsToSend.append(Utility.Packet.newEndPacket(self.startSeqNum + len(stringsToSend) + 1))
+        print(f"# packets to send: {len(packetsToSend)}")
             
         # Initialize queues
         toSendQueue = list()
         sentQueue = list()
-
-                
-        ## Wait to receive an ACK
-        while True:
-            (recvPacket, _) = self.recv()
-            if recvPacket.packetHeader.type == 3 and recvPacket.packetHeader.seq_num == self.startSeqNum:
-                break
         
         ## Send the file
-        while not self.senderPacketQueue.empty():
+        startTime = time.time_ns()
+        while len(packetsToSend) != 0:
             # Add packets to the sending queue
             for packet in packetsToSend:
                 if packet.packetHeader.seq_num < self.startSeqNum + self.senderWindowPos + self.senderWindowSize and packet not in toSendQueue and packet not in sentQueue:
@@ -90,8 +109,15 @@ class RDTSocket(Utility.UnreliableSocket):
             
             # Send a packet (if there is a packet to send)
             if len(toSendQueue) > 0:
-                packetToSend = toSendQueue.pop(0)
+                packetDict = {}
+                for packet in toSendQueue:
+                    packetDict[packet.packetHeader.seq_num] = packet
+                keys = list(packetDict.keys())
+                keys.sort()
+                packetToSend = packetDict[keys[0]]
+                toSendQueue.remove(packetToSend)
                 self.sendto(packetToSend, self.targetAddress)
+                print(f"Sent packet {packetToSend.packetHeader.seq_num}")
                 sentQueue.append(packet)
                 
             # Check for ACKs
@@ -102,13 +128,25 @@ class RDTSocket(Utility.UnreliableSocket):
                 # Remove packet from queues
                 for packet in packetsToSend:
                     if packet.packetHeader.seq_num < seq_num:
-                        packetsToSend.remove(packet) # ! Only removes first instance and does not account for potential error
-                        toSendQueue.remove(packet)
-                        sentQueue.remove(packet)
+                        for l in [packetsToSend, toSendQueue, sentQueue]:
+                            while True:
+                                try:
+                                    l.remove(packet)
+                                except:
+                                    break
                 
                 # Advance window if necessary
                 if len(packetsToSend) > 0 and packetsToSend[0].packetHeader.seq_num > seq_num:
                     self.senderWindowPos = seq_num
+                    startTime = time.time_ns()
+            
+            # Timeout
+            if time.time_ns() - startTime > RDTSocket.waitTime:
+                startTime = time.time_ns()
+                if len(sentQueue) > 0:
+                    toSendQueue.append(sentQueue.pop(0))
+                else:
+                    toSendQueue.append(packetsToSend[0])
         
         ## Close the connection
         self.close()
@@ -119,7 +157,9 @@ class RDTSocket(Utility.UnreliableSocket):
     def recv(self):
         recvTuple = self.recvfrom(RDTSocket.bufferSize)
         (recvPacket, _) = recvTuple
-        if recvPacket == None or not recvPacket.verifyPacket():
+        if recvPacket == None or not recvPacket.verify_packet():
+            if recvPacket != None:
+                print("Invalid packet received")
             return (None, None)
         else:
             return recvTuple
@@ -148,15 +188,21 @@ class RDTSocket(Utility.UnreliableSocket):
                     self.sendACK(self.receiverWindowPos)
                 
                 # Process buffer and advance window
-                seq_nums = list(buffer.keys()).sort()
+                seq_nums = list(buffer.keys())
+                seq_nums.sort()
                 for num in seq_nums:
                     if num == self.receiverWindowPos:
+                        print(f"Packet {num} processed: type {buffer[num].packetHeader.type}")
                         self.receiverWindowPos += 1
                         if buffer[num].packetHeader.type == 2:
                             receivedFile += buffer.pop(num).text
-                        elif buffer[num].packetHeader.type == 1:
+                        elif buffer[num].packetHeader.type == 1: # End packet check
                             buffer.clear()
                             gotEndPacket == True
+                            for _ in range(10):
+                                self.sendACK(self.receiverWindowPos)
+                            self.close()
+                            return receivedFile
                     else:
                         break
                 
@@ -164,6 +210,7 @@ class RDTSocket(Utility.UnreliableSocket):
                 self.sendACK(self.receiverWindowPos)                        
         
         ## Close the connections
+        print("Closed connection")
         self.close()
         return receivedFile
     

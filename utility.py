@@ -1,4 +1,4 @@
-import socket, random, zlib, pickle
+import socket, random, zlib, pickle, string
 
 class UnreliableSocket:
     
@@ -8,6 +8,7 @@ class UnreliableSocket:
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.messageQueue = []
         self.delayedMessage = None
+        self.connected = False
         
         self.address = (ip, port)
         if ip != None:
@@ -25,7 +26,10 @@ class UnreliableSocket:
             self.delayedMessage = None
         
         # Receive new data
-        newMessage = self.socket.recvfrom(bufferSize, socket.MSG_DONTWAIT)
+        try:
+            newMessage = self.socket.recvfrom(bufferSize, socket.MSG_DONTWAIT)
+        except:
+            newMessage = (None, None)
         (packetData, _) = newMessage
         if packetData != None: # <- check new data and append it to the queue
             self.messageQueue.append(newMessage)
@@ -36,6 +40,7 @@ class UnreliableSocket:
         
         # Select a message
         currentMessage = self.messageQueue.pop(0)
+        packet = pickle.loads(currentMessage[0])
     
         # Apply simulated failures
         if random.random() < UnreliableSocket.probabilityOfFailure:
@@ -44,28 +49,37 @@ class UnreliableSocket:
             # Apply the selected event  
             match simulatedEvent:
                 case "packet loss":
-                    self.messageQueue.pop(0)
-                    currentMessage = (None, None)
+                    return (None, None)
                 case "packet delay":
                     self.delayedMessage = currentMessage
-                    currentMessage = (None, None)
+                    return (None, None)
                 case "packet corruption":
-                    currentPacketData = currentMessage[0]                                 # Isolate the data
-                    selectedByte = random.randint(0, len(currentPacketData)-1)            # Select a byte to modify
-                    currentPacketData[selectedByte] = currentPacketData[selectedByte] ^ 5 # Modify the byte
-                    currentMessage[0] = currentPacketData                                 # Switch the data to the modified data
+                    if packet.text != None: # If there is data to corrupt, corrupt it
+                        encodedText = bytearray(packet.text, "utf-8")
+                        selectedByte = random.randint(0, len(encodedText)-1)      # Select a byte to modify
+                        encodedText[selectedByte] = encodedText[selectedByte] ^ 5 # Modify the byte
+                        packet.text = encodedText.decode("utf-8")                 # Switch the data to the modified data
 
         # Reformat the object
-        returnTuple = (pickle.loads(currentMessage[0]), currentMessage[1])
+        returnTuple = (packet, currentMessage[1])
 
         # Return the message
         return returnTuple
                     
     def sendto(self, packet, address):
+        packet.packetHeader.address = self.socket.getsockname()
         data = pickle.dumps(packet)
         if len(data) > 1400:
             raise Exception(f"data size too big: {len(data)} > 1400")
-        return self.socket.sendto(data, address)
+        
+        # if not self.connected:
+        #     self.socket.connect(address)
+        #     self.connected = True
+        try:
+            self.socket.send(data)
+        except:
+            self.socket.connect(address)
+            self.socket.send(data)
     
     def close(self):
         self.socket.close()
@@ -77,6 +91,7 @@ class PacketHeader:
         self.seq_num = seq_num 
         self.length = length     # Length of data; 0 for ACK, START, and END packets
         self.checksum = checksum # 32-bit CRC
+        self.address = None      # Sender socket address
         
     def __eq__(self, obj):
         if type(self) != type(obj):
@@ -92,30 +107,36 @@ class Packet:
     
     @classmethod
     def newStartPacket(cls, seq_num):
-        packetHeader = PacketHeader(0, seq_num, 0, Packet.compute_checksum())
-        return cls(packetHeader, None)
+        newPacket = Packet(None, None)
+        newPacket.packetHeader = PacketHeader(0, seq_num, 0, newPacket.compute_checksum())
+        return newPacket
     
     @classmethod
     def newEndPacket(cls, seq_num):
-        packetHeader = PacketHeader(1, seq_num, 0, Packet.compute_checksum())
-        return cls(packetHeader, None)
+        newPacket = Packet(None, None)
+        newPacket.packetHeader = PacketHeader(1, seq_num, 0, newPacket.compute_checksum())
+        return newPacket
 
     @classmethod
     def newDataPacket(cls, seq_num, text):
-        packetHeader = PacketHeader(2, seq_num, len(text), Packet.compute_checksum())
-        return cls(packetHeader, text)
+        newPacket = Packet(None, text)
+        newPacket.packetHeader = PacketHeader(2, seq_num, len(text), newPacket.compute_checksum())
+        return newPacket
     
     @classmethod
     def newAckPacket(cls, seq_num):
-        packetHeader = PacketHeader(3, seq_num, 0, Packet.compute_checksum())
-        return cls(packetHeader, None)
+        newPacket = Packet(None, None)
+        newPacket.packetHeader = PacketHeader(3, seq_num, 0, newPacket.compute_checksum())
+        return newPacket
     
-    @staticmethod
     def compute_checksum(self) -> int:
-        return zlib.crc32(pickle.dumps(self))
+        if self.text != None:
+            return zlib.crc32(self.text.encode())
+        else:
+            return 0
     
     def verify_packet(self) -> bool:
-        return self.packetHeader.checksum == Packet.compute_checksum()
+        return self.packetHeader.checksum == self.compute_checksum()
     
     def __eq__(self, obj):
         if type(obj) != type(self):

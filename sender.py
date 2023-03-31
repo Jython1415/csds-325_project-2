@@ -8,10 +8,10 @@ def main():
         fileString = "".join(f.readlines())
     
     # Set up the socket
-    sendSocket = RDTSocket(sys.argv[3])
+    sendSocket = RDTSocket(int(sys.argv[3]))
     
     # Send the file
-    sendSocket.send(fileString, (sys.argv[1], sys.argv[2]))
+    sendSocket.send(fileString, (sys.argv[1], int(sys.argv[2])))
     
     # Complete
     print("File Sent")
