@@ -18,12 +18,6 @@
 
         $ diff download.txt alice.txt
 
-## Additional Functionality
-
-- Add the `-s` option to either the sender or receiver to add a delay to its primary loop. This is useful to see how both clients respond to delays.
-
-        $ python3 receiver.py [port] [window size] -s [delay in ms]
-
 ## Documentation
 
 The code is well documented and commented, so please see the individual files for an explanation of how the code is structured.
