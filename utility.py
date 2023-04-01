@@ -1,4 +1,4 @@
-import socket, random, zlib, pickle, string
+import socket, random, zlib, pickle
 
 class UnreliableSocket:
     
