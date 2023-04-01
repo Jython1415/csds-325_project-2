@@ -1,4 +1,4 @@
-import random, time
+import time
 import utility as Utility
 
 class RDTSocket(Utility.UnreliableSocket):
