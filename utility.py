@@ -2,7 +2,7 @@ import socket, random, zlib, pickle
 
 class UnreliableSocket:
     
-    probabilityOfFailure = .3
+    probabilityOfFailure = .7
     
     def __init__(self, ip = None, port = None):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
